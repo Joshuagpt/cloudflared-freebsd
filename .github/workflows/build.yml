@@ -45,6 +45,28 @@ jobs:
             echo "--- after: $x"; head -5 "$x"
           done
 
+      - name: Add FreeBSD system collector
+        run: |
+          echo "== diagnostic/ 目录文件 =="
+          ls -la diagnostic/
+          echo "== 定义 NewSystemCollectorImpl 的文件 =="
+          cands=$(grep -l "func NewSystemCollectorImpl" diagnostic/*.go | grep -v -e windows -e _test || true)
+          echo "$cands"
+          if [ -z "$cands" ]; then
+            echo "没有找到非 Windows 的定义文件"
+            grep -rn "NewSystemCollectorImpl" diagnostic/ || true
+            exit 1
+          fi
+          src=$(echo "$cands" | grep -i -e darwin -e macos | head -1)
+          [ -z "$src" ] && src=$(echo "$cands" | head -1)
+          echo "选用: $src"
+          echo "--- before: $src"; head -8 "$src"
+          dst=diagnostic/system_collector_freebsd.go
+          cp "$src" "$dst"
+          sed -i -E '/^\/\/go:build/d; /^\/\/ \+build/d' "$dst"
+          sed -i '1i //go:build freebsd\n' "$dst"
+          echo "--- after: $dst"; head -8 "$dst"
+
       - name: Build
         run: |
           mkdir -p out
@@ -62,5 +84,5 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           name: cloudflared ${{ inputs.tag }} (FreeBSD)
-          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Only change: added freebsd to build tags in diagnostic/network."
+          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Changes: added freebsd to build tags in diagnostic/network, and a freebsd copy of the system collector in diagnostic/."
           files: out/*
