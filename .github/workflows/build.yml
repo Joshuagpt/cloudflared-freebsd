@@ -28,6 +28,23 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Patch diagnostic for FreeBSD
+        run: |
+          f=$(grep -rl "NetworkCollectorImpl struct" diagnostic/network/ | grep -v windows || true)
+          echo "Target file(s): $f"
+          if [ -z "$f" ]; then
+            echo "未找到定义文件，列出该目录供排查："
+            ls -la diagnostic/network/
+            grep -rn "NetworkCollectorImpl" diagnostic/ || true
+            exit 1
+          fi
+          for x in $f; do
+            echo "--- before: $x"; head -5 "$x"
+            sed -i -E '/^\/\/go:build/ s/(darwin \|\| linux)/\1 || freebsd/' "$x"
+            sed -i -E '/^\/\/ \+build/ s/(darwin linux|linux darwin)/\1 freebsd/' "$x"
+            echo "--- after: $x"; head -5 "$x"
+          done
+
       - name: Build
         run: |
           mkdir -p out
@@ -45,5 +62,5 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           name: cloudflared ${{ inputs.tag }} (FreeBSD)
-          body: "Unmodified upstream source, cross-compiled with GOOS=freebsd."
+          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Only change: added freebsd to build tags in diagnostic/network."
           files: out/*
