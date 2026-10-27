@@ -49,30 +49,45 @@ jobs:
         run: |
           echo "== diagnostic/ 目录文件 =="
           ls -la diagnostic/
-          echo "== 定义 NewSystemCollectorImpl 的文件 =="
           cands=$(grep -l "func NewSystemCollectorImpl" diagnostic/*.go | grep -v -e windows -e _test || true)
-          echo "$cands"
+          echo "定义文件: $cands"
           if [ -z "$cands" ]; then
-            echo "没有找到非 Windows 的定义文件"
             grep -rn "NewSystemCollectorImpl" diagnostic/ || true
             exit 1
           fi
           src=$(echo "$cands" | grep -i -e darwin -e macos | head -1)
           [ -z "$src" ] && src=$(echo "$cands" | head -1)
           echo "选用: $src"
-          echo "--- before: $src"; head -8 "$src"
           dst=diagnostic/system_collector_freebsd.go
           cp "$src" "$dst"
           sed -i -E '/^\/\/go:build/d; /^\/\/ \+build/d' "$dst"
           sed -i '1i //go:build freebsd\n' "$dst"
-          echo "--- after: $dst"; head -8 "$dst"
+          head -8 "$dst"
+
+      - name: Add FreeBSD token file helper
+        run: |
+          echo "== createTokenFile 出现的位置 =="
+          grep -rn "createTokenFile" cmd/cloudflared/ || true
+          src=$(grep -l "^func createTokenFile" cmd/cloudflared/*.go | grep -v -e _test -e windows | head -1 || true)
+          if [ -z "$src" ]; then
+            echo "未找到非 Windows 的定义文件"
+            ls -la cmd/cloudflared/
+            exit 1
+          fi
+          echo "选用: $src"
+          awk '/^func createTokenFile/{p=1} p{print} p&&/^}/{exit}' "$src" > /tmp/func.go
+          echo "--- 抽出的函数:"; cat /tmp/func.go
+          { printf '//go:build freebsd\n\npackage main\n\n'; cat /tmp/func.go; } > cmd/cloudflared/token_file_freebsd.go
+          go install golang.org/x/tools/cmd/goimports@latest
+          "$(go env GOPATH)/bin/goimports" -w cmd/cloudflared/token_file_freebsd.go
+          echo "--- 生成的文件:"; cat cmd/cloudflared/token_file_freebsd.go
 
       - name: Build
         run: |
           mkdir -p out
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=freebsd GOARCH=$arch \
-              go build -trimpath -buildvcs=false \
+              go build -trimpath -buildvcs=false -gcflags=-e \
               -ldflags "-s -w -X main.Version=${{ inputs.tag }}" \
               -o out/cloudflared-freebsd-$arch ./cmd/cloudflared
           done
@@ -84,5 +99,5 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           name: cloudflared ${{ inputs.tag }} (FreeBSD)
-          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Changes: added freebsd to build tags in diagnostic/network, and a freebsd copy of the system collector in diagnostic/."
+          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Changes: freebsd build tags in diagnostic/network; freebsd copies of the system collector (diagnostic/) and createTokenFile (cmd/cloudflared/). Tunnel code is untouched."
           files: out/*
