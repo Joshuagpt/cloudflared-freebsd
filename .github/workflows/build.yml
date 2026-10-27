@@ -1,0 +1,49 @@
+name: build-cloudflared-freebsd
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "上游 cloudflared 版本号"
+        required: true
+        default: "2026.10.4"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upstream
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/cloudflared
+          ref: ${{ inputs.tag }}
+
+      - name: Show source commit
+        run: git log -1 --format='%H %s'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: |
+          mkdir -p out
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=freebsd GOARCH=$arch \
+              go build -trimpath -buildvcs=false \
+              -ldflags "-s -w -X main.Version=${{ inputs.tag }}" \
+              -o out/cloudflared-freebsd-$arch ./cmd/cloudflared
+          done
+          file out/*
+          cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: cloudflared ${{ inputs.tag }} (FreeBSD)
+          body: "Unmodified upstream source, cross-compiled with GOOS=freebsd."
+          files: out/*
