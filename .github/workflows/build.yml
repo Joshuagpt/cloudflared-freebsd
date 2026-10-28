@@ -4,9 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "上游 cloudflared 版本号"
+        description: "上游 cloudflared 版本号（必填，如 2026.10.5，不带 v）"
         required: true
-        default: "2026.10.4"
+      prerelease:
+        description: "作为预发布版（不会被脚本自动拉取，需手动转正）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -15,11 +18,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${TAG#v}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          if ! git ls-remote --exit-code --tags https://github.com/cloudflare/cloudflared.git "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "上游仓库中不存在版本 $TAG，请检查版本号"
+            exit 1
+          fi
+          echo "上游版本 $TAG 存在"
+
       - name: Checkout upstream
         uses: actions/checkout@v4
         with:
           repository: cloudflare/cloudflared
-          ref: ${{ inputs.tag }}
+          ref: ${{ env.TAG }}
 
       - name: Show source commit
         run: git log -1 --format='%H %s'
@@ -64,12 +79,8 @@ jobs:
 
       - name: Add FreeBSD token file helper
         run: |
-          echo "== createTokenFile 相关定义和调用 =="
           grep -rn "createTokenFile" cmd/cloudflared/ || true
-          echo "== common_service.go 开头 60 行 =="
           sed -n '1,60p' cmd/cloudflared/common_service.go
-
-          # 优先：找非 Windows 的 createTokenFile( 定义，精确匹配，不含 Unix 后缀
           src=$(grep -l "^func createTokenFile(" cmd/cloudflared/*.go | grep -v -e _test -e windows | head -1 || true)
           if [ -n "$src" ]; then
             echo "找到定义: $src"
@@ -81,11 +92,10 @@ jobs:
           fi
           echo "--- 抽出的函数:"; cat /tmp/func.go
           if [ ! -s /tmp/func.go ]; then echo "函数为空，终止"; exit 1; fi
-
           { printf '//go:build freebsd\n\npackage main\n\n'; cat /tmp/func.go; } > cmd/cloudflared/token_file_freebsd.go
           go install golang.org/x/tools/cmd/goimports@latest
           "$(go env GOPATH)/bin/goimports" -w cmd/cloudflared/token_file_freebsd.go
-          echo "--- 生成的文件:"; cat cmd/cloudflared/token_file_freebsd.go
+          cat cmd/cloudflared/token_file_freebsd.go
 
       - name: Build
         run: |
@@ -93,7 +103,7 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=freebsd GOARCH=$arch \
               go build -trimpath -buildvcs=false -gcflags=-e \
-              -ldflags "-s -w -X main.Version=${{ inputs.tag }}" \
+              -ldflags "-s -w -X main.Version=${{ env.TAG }}" \
               -o out/cloudflared-freebsd-$arch ./cmd/cloudflared
           done
           file out/*
@@ -102,7 +112,9 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag }}
-          name: cloudflared ${{ inputs.tag }} (FreeBSD)
-          body: "Upstream cloudflared ${{ inputs.tag }} cross-compiled for FreeBSD. Changes: freebsd build tags in diagnostic/network; freebsd copies of the system collector (diagnostic/) and createTokenFile (cmd/cloudflared/). Tunnel code is untouched."
+          tag_name: ${{ env.TAG }}
+          name: cloudflared ${{ env.TAG }} (FreeBSD)
+          prerelease: ${{ inputs.prerelease }}
+          make_latest: ${{ !inputs.prerelease }}
+          body: "Upstream cloudflared ${{ env.TAG }} cross-compiled for FreeBSD. Changes: freebsd build tags in diagnostic/network; freebsd copies of the system collector (diagnostic/) and createTokenFile (cmd/cloudflared/). Tunnel code is untouched."
           files: out/*
